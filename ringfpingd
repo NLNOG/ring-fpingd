@@ -1,0 +1,153 @@
+#!/usr/bin/perl
+
+# ringfpingd - regularly fping all ring participants, report results to graphite service
+
+use strict;
+use threads qw(yield);
+use threads::shared;
+
+use Data::Dumper;
+use Getopt::Long;
+use POSIX;
+use Sys::Hostname;
+
+# User settings
+
+my $maxthreads   = 4;							# Maximum number of threads (excluding boss)
+my $pinginterval = 4;							# Interval in seconds between pings
+my $hostinterval = 4;							# Interval in seconds to re-read the hosts file
+
+
+# No more user settable stuff
+
+my $exit = 0; 								# Global exit switch
+
+my $hostname = hostname(); $hostname=~s/\.ring.*//g;			# /etc/hostname is overqualified
+
+my ($debug, $foreground, $help, $maxworkitems, $verbose);
+my (@resultlist, @threadpool, @worklist);
+
+GetOptions ("f|foreground" => \$foreground, "h|help" => \$help, "v|verbose" => \$verbose);
+
+if ($help) {
+	print "$0:\n\t-f = foreground only\n\t-v = verbose (foreground only)";
+	exit;
+}
+
+$debug = 1 if ($foreground && $verbose);				# Debugging is achieved through verbose and foreground mode
+
+### MAIN ###
+
+# Share some things
+share($exit);
+share(@worklist);
+share($maxworkitems);
+
+&daemonize unless ($foreground);
+
+# Create our workers
+foreach (1..$maxthreads) {
+	push (@threadpool, threads->create('worker'));
+}
+# Create our boss
+my $boss = threads->create('boss');
+push (@threadpool, $boss);
+# Join our threadpool
+foreach (@threadpool) {
+	$_->join();
+}
+exit;
+
+### SUBROUTINES ###
+
+sub daemonize {								# Daemonize
+
+	# Fork and exit parent. Makes sure we are not a process group leader.
+	my $pid = fork;
+	exit 0 if $pid;
+	exit 1 if not defined $pid;
+
+	# Become leader of a new session, group leader of new
+	# process group and detach from any terminal.
+	setsid();
+	$pid = fork;
+	exit 0 if $pid;
+	exit 1 if not defined $pid;
+}
+
+sub exit {								# Make a clean exit and take the threads with us
+	$exit = 1;
+	exit;
+}
+
+sub read_hosts {							# Generate hostmap database
+	my $fh;
+	lock(@worklist);
+	@worklist = ();							# Initialise worklist
+	open ($fh, "< /home/claranet/hosts")  || die "Can't open /etc/hosts $!";
+	HOST:
+	while (<$fh>) {
+		chomp;
+		next HOST if ($_=~m/infra/);
+		if ($_=~m/^(\S+)\s+(\S+)\s+/) {
+			my ($ip, $host) = ($1, $2);
+			next HOST if ($host eq $hostname);		# Ignore ourselves
+			$host .= (($ip=~m/:/) ? '_v6' : '_v4');		# AFIise the hostname
+			push (@worklist, shared_clone({$ip => $host}));	# Add workent
+		}
+	}
+	close ($fh);
+
+	$maxworkitems = ceil(($#worklist + 1) / $maxthreads);		# Work out from the worklist size, how many items each thread should have
+
+	return;
+}
+
+sub worker {								# Actual worker thread
+
+	my @workitems;
+	my $tid = threads->tid();
+
+	$SIG{'USR1'} = sub {						# Inline sub for when the boss calls, it can access our internals
+			print "TID = $tid, reloading our worklist...\n" if ($debug);
+			@workitems = ();
+			lock(@worklist);
+			foreach (1..$maxworkitems) {
+				my $newworkitem = pop(@worklist);
+				push (@workitems, $newworkitem) if ($newworkitem);
+			}
+	};
+	
+	while(!$exit){							# Main thread runloop
+
+		foreach (@workitems) {
+			foreach my $ip (keys %{$_}) {
+				my $host  = $_->{$ip};
+				my $fpingcmd = ($ip=~m/:/) ? 'fping6' : 'fping';
+				my $fping = `$fpingcmd 2>&1 -q -c 1 $ip`;
+				my ($xmt, $rcv, $los, $min, $avg, $max);
+				if ($fping=~m# : xmt/rcv/%loss = (\d+)/(\d+)/(\d+)%#) {
+					($xmt, $rcv, $los) = ($1, $2, $3);
+				}
+				if ($fping=~m#min/avg/max = ([^\/]+)/([^\/]+)/([^\/]+)#) {
+					($min, $avg, $max) = ($1, $2, $3);
+				}
+				print "TID = $tid, IP = $ip, HOST = $host, XMT = $xmt, RCV = $rcv, LOS = $los, MIN = $min, AVG = $avg, MAX = $max\n" if ($debug);
+			}
+		}
+		yield();
+		sleep $pinginterval;
+	}
+
+}
+
+sub boss {								# Boss thread
+	while(!$exit){
+		&read_hosts;
+		foreach my $tid (0..($maxthreads-1)) {			# Send SIGUSR1 to the threadpool members
+			$threadpool[$tid]->kill('USR1');
+		}
+		yield();
+		sleep $hostinterval;
+	}
+}
