@@ -3,6 +3,7 @@
 # ringfpingd - regularly fping all ring participants, report results to graphite service
 
 use strict;
+use warnings;
 use threads qw(yield);
 use threads::shared;
 
@@ -13,14 +14,14 @@ use Sys::Hostname;
 
 # User settings
 
+my $myname	 = 'ringfping';						# My own name
 my $maxthreads   = 4;							# Maximum number of threads (excluding boss)
 my $pinginterval = 4;							# Interval in seconds between pings
-my $hostinterval = 4;							# Interval in seconds to re-read the hosts file
+my $hostinterval = 60*60;						# Interval in seconds to re-read the hosts file (1 hr)
 
+# No more user settable stuff, here be dragons!
 
-# No more user settable stuff
-
-my $exit = 0; 								# Global exit switch
+my $cleanexit = 0; 							# Global clean exit switch
 
 my $hostname = hostname(); $hostname=~s/\.ring.*//g;			# /etc/hostname is overqualified
 
@@ -34,33 +35,60 @@ if ($help) {
 	exit;
 }
 
-$debug = 1 if ($foreground && $verbose);				# Debugging is achieved through verbose and foreground mode
+if ($verbose) {								# Verbose mode means debugging, if not foregrounded, send to STDERR
+	unless ($foreground) {
+		select (STDERR);					# Change default select target to STDERR
+	}
+	$debug = 1;							# Switch on debugging messages
+}
 
 ### MAIN ###
 
+# Register global SIGHUP handler using POSIX , this makes us play nicely with the OS, upon SIGHUP we call our boss key
+my $sigset = POSIX::SigSet->new();
+my $action = POSIX::SigAction->new('bosskey', $sigset, &POSIX::SA_NODEFER);
+POSIX::sigaction(&POSIX::SIGHUP, $action);
+
 # Share some things
-share($exit);
+share($cleanexit);
 share(@worklist);
 share($maxworkitems);
 
+# Become a daemon if we are asked to
 &daemonize unless ($foreground);
 
 # Create our workers
 foreach (1..$maxthreads) {
 	push (@threadpool, threads->create('worker'));
 }
+
 # Create our boss
 my $boss = threads->create('boss');
 push (@threadpool, $boss);
-# Join our threadpool
+
+# Join our threadpool (i.e wait for the threads to terminate before continuing)
 foreach (@threadpool) {
 	$_->join();
 }
+
+# That's the end
 exit;
 
 ### SUBROUTINES ###
 
 sub daemonize {								# Daemonize
+
+	# Set our starting name	
+	$0 = $myname;
+
+	# Get our running name
+	my $runname = $myname . 'd';
+
+	# check if our daemon is actually running	
+
+	unless (system("ps -e | grep >/dev/null $runname")) {
+		die "Can't daemonize, another copy appears to be running";
+	}
 
 	# Fork and exit parent. Makes sure we are not a process group leader.
 	my $pid = fork;
@@ -73,10 +101,16 @@ sub daemonize {								# Daemonize
 	$pid = fork;
 	exit 0 if $pid;
 	exit 1 if not defined $pid;
+
+	# We are a daemon now!
+	$0 = $runname;
+
 }
 
-sub exit {								# Make a clean exit and take the threads with us
-	$exit = 1;
+sub cleanexit {								# Make a clean exit and take the threads with us
+	print "Exiting threads cleanly...\n" if ($debug);
+	$cleanexit = 1;
+	sleep 1;
 	exit;
 }
 
@@ -117,8 +151,8 @@ sub worker {								# Actual worker thread
 				push (@workitems, $newworkitem) if ($newworkitem);
 			}
 	};
-	
-	while(!$exit){							# Main thread runloop
+
+	while(!$cleanexit){							# Main thread runloop
 
 		foreach (@workitems) {
 			foreach my $ip (keys %{$_}) {
@@ -132,7 +166,7 @@ sub worker {								# Actual worker thread
 				if ($fping=~m#min/avg/max = ([^\/]+)/([^\/]+)/([^\/]+)#) {
 					($min, $avg, $max) = ($1, $2, $3);
 				}
-				print "TID = $tid, IP = $ip, HOST = $host, XMT = $xmt, RCV = $rcv, LOS = $los, MIN = $min, AVG = $avg, MAX = $max\n" if ($debug);
+				#print "TID = $tid, IP = $ip, HOST = $host, XMT = $xmt, RCV = $rcv, LOS = $los, MIN = $min, AVG = $avg, MAX = $max\n" if ($debug);
 			}
 		}
 		yield();
@@ -142,12 +176,19 @@ sub worker {								# Actual worker thread
 }
 
 sub boss {								# Boss thread
-	while(!$exit){
-		&read_hosts;
-		foreach my $tid (0..($maxthreads-1)) {			# Send SIGUSR1 to the threadpool members
-			$threadpool[$tid]->kill('USR1');
-		}
+
+	$SIG{'USR1'} = undef;						# The boss doesn't yield to SIGUSR1
+
+	while(!$cleanexit){
+		&bosskey;						# Calls the boss key each time it runs
 		yield();
-		sleep $hostinterval;
+		sleep $hostinterval;					# And then has a snooze
 	}
+}
+
+sub bosskey {								# The boss key is used by the boss to ask the workers to get new work
+		&read_hosts;
+		foreach my $thread (@threadpool) {			# Send SIGUSR1 to the threadpool members
+			$thread->kill('USR1') if ($thread);
+		}
 }
