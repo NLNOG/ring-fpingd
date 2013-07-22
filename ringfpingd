@@ -9,12 +9,14 @@ use threads::shared;
 
 use Data::Dumper;
 use Getopt::Long;
+use IO::Socket::INET;
 use POSIX;
 use Sys::Hostname;
 
 # User settings
 
 my $myname	 = 'ringfping';						# My own name
+my $server	 = 'localhost';						# Graphite Server
 my $maxthreads   = 4;							# Maximum number of threads (excluding boss)
 my $pinginterval = 4;							# Interval in seconds between pings
 my $hostinterval = 60*60;						# Interval in seconds to re-read the hosts file (1 hr)
@@ -22,6 +24,8 @@ my $hostinterval = 60*60;						# Interval in seconds to re-read the hosts file (
 # No more user settable stuff, here be dragons!
 
 my $cleanexit = 0; 							# Global clean exit switch
+
+my $port = 2003;							# Graphite plaintext port
 
 my $hostname = hostname(); $hostname=~s/\.ring.*//g;			# /etc/hostname is overqualified
 
@@ -57,14 +61,16 @@ share($maxworkitems);
 # Become a daemon if we are asked to
 &daemonize unless ($foreground);
 
-# Create our workers
-foreach (1..$maxthreads) {
-	push (@threadpool, threads->create('worker'));
-}
+# Open our socket#
 
 # Create our boss
 my $boss = threads->create('boss');
 push (@threadpool, $boss);
+
+# Create our workers
+foreach (1..$maxthreads) {
+	push (@threadpool, threads->create('worker'));
+}
 
 # Join our threadpool (i.e wait for the threads to terminate before continuing)
 foreach (@threadpool) {
@@ -140,7 +146,9 @@ sub read_hosts {							# Generate hostmap database
 sub worker {								# Actual worker thread
 
 	my @workitems;
+	my $self = threads->self();
 	my $tid = threads->tid();
+	my $socket = new IO::Socket::INET(PeerHost=>$server, PeerPort=>$port, Proto=>'udp') || die("TID = $tid, error in Socket Creation : $!\n");
 
 	$SIG{'USR1'} = sub {						# Inline sub for when the boss calls, it can access our internals
 			print "TID = $tid, reloading our worklist...\n" if ($debug);
@@ -152,13 +160,17 @@ sub worker {								# Actual worker thread
 			}
 	};
 
+	$self->kill('USR1');							# Kick ourselves up the backside and grab our worklist before we start
+
+
 	while(!$cleanexit){							# Main thread runloop
 
 		foreach (@workitems) {
 			foreach my $ip (keys %{$_}) {
 				my $host  = $_->{$ip};
-				my $fpingcmd = ($ip=~m/:/) ? 'fping6' : 'fping';
-				my $fping = `$fpingcmd 2>&1 -q -c 1 $ip`;
+				my $afi   = ($ip=~m/:/) ? 'ipv6' : 'ipv4';
+				my $fpingcmd = ($afi eq 'ipv6') ? 'fping6' : 'fping';
+				my $fping = `$fpingcmd 2>&1 -q -c 1 $ip`; chomp($fping);
 				my ($xmt, $rcv, $los, $min, $avg, $max);
 				if ($fping=~m# : xmt/rcv/%loss = (\d+)/(\d+)/(\d+)%#) {
 					($xmt, $rcv, $los) = ($1, $2, $3);
@@ -166,12 +178,28 @@ sub worker {								# Actual worker thread
 				if ($fping=~m#min/avg/max = ([^\/]+)/([^\/]+)/([^\/]+)#) {
 					($min, $avg, $max) = ($1, $2, $3);
 				}
-				#print "TID = $tid, IP = $ip, HOST = $host, XMT = $xmt, RCV = $rcv, LOS = $los, MIN = $min, AVG = $avg, MAX = $max\n" if ($debug);
+				else {
+					($min, $avg, $max) = (0, 0, 0,);
+				}
+
+				# Build dispatch to graphite
+				my $dispatch_hostname 	= ($afi eq 'ipv6') ? "${hostname}_v6" : "${hostname}_v4";
+				my $dispatch_time 	= time;
+				my $dispatch_prefix 	= "ping.$dispatch_hostname.$host";
+				my $dispatch_str 	= ''
+							. "$dispatch_prefix.packetloss $los $dispatch_time\n"
+							. "$dispatch_prefix.minrtt $min $dispatch_time\n"
+							. "$dispatch_prefix.avgrtt $avg $dispatch_time\n"
+							. "$dispatch_prefix.maxrtt $max $dispatch_time\n";
+				print $dispatch_str if ($debug);
+				print $socket $dispatch_str;
 			}
 		}
 		yield();
 		sleep $pinginterval;
 	}
+
+	close($socket);
 
 }
 
