@@ -16,9 +16,9 @@ use Sys::Hostname;
 # User settings
 
 my $myname	 = 'ringfping';						# My own name
-my $server	 = 'localhost';						# Graphite Server
+my $server	 = 'graphite.convergence.cx';				# Graphite Server
 my $maxthreads   = 4;							# Maximum number of threads (excluding boss)
-my $pinginterval = 4;							# Interval in seconds between pings
+my $pinginterval = 10;							# Interval in seconds between pings
 my $hostinterval = 60*60;						# Interval in seconds to re-read the hosts file (1 hr)
 
 # No more user settable stuff, here be dragons!
