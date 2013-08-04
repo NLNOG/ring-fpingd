@@ -16,7 +16,9 @@ use Sys::Hostname;
 # User settings
 
 my $myname	 = 'ringfping';						# My own name
-my $server	 = 'graphite.convergence.cx';				# Graphite Server
+my $server	 = 'graphite.convergence.cx';				# Graphite Server running UDP listener
+my $key		 = 'secretkey';						# Graphite UDP Listener Secret key
+my $dispatch_root= 'nlnog.ring.ping';					# Root of Server metric tree
 my $maxthreads   = 4;							# Maximum number of threads (excluding boss)
 my $pinginterval = 10;							# Interval in seconds between pings
 my $hostinterval = 60*60;						# Interval in seconds to re-read the hosts file (1 hr)
@@ -185,7 +187,7 @@ sub worker {								# Actual worker thread
 				# Build dispatch to graphite
 				my $dispatch_hostname 	= ($afi eq 'ipv6') ? "${hostname}_v6" : "${hostname}_v4";
 				my $dispatch_time 	= time;
-				my $dispatch_prefix 	= "ping.$dispatch_hostname.$host";
+				my $dispatch_prefix 	= $key ? "$key $dispatch_root.$dispatch_hostname.$host" : "$dispatch_root.$dispatch_hostname.$host";
 				my $dispatch_str 	= ''
 							. "$dispatch_prefix.packetloss $los $dispatch_time\n"
 							. "$dispatch_prefix.minrtt $min $dispatch_time\n"
