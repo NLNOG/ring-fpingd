@@ -7,7 +7,9 @@ use warnings;
 use threads qw(yield);
 use threads::shared;
 
+use Config::Simple;
 use Data::Dumper;
+use Digest::SHA qw(sha1 sha1_hex sha1_base64);
 use Getopt::Long;
 use IO::Socket::INET;
 use POSIX;
@@ -15,13 +17,18 @@ use Sys::Hostname;
 
 # User settings
 
-my $myname	 = 'ringfping';						# My own name
-my $server	 = 'graphite.convergence.cx';				# Graphite Server running UDP listener
-my $key		 = 'secretkey';						# Graphite UDP Listener Secret key
-my $dispatch_root= 'nlnog.ring.ping';					# Root of Server metric tree
-my $maxthreads   = 4;							# Maximum number of threads (excluding boss)
-my $pinginterval = 10;							# Interval in seconds between pings
-my $hostinterval = 60*60;						# Interval in seconds to re-read the hosts file (1 hr)
+my $cfile = '/etc/ringfpingd.conf';
+
+my $config  = new Config::Simple($cfile) or die Config::Simple->error();
+
+my $myname	 = $config->param('myname');
+my $server	 = $config->param('server');
+my $key		 = $config->param('key');
+my $keytype	 = $config->param('keytype');
+my $dispatch_root= $config->param('dispatch_root');
+my $maxthreads   = $config->param('maxthreads');
+my $pinginterval = $config->param('pinginterval');
+my $hostinterval = $config->param('hostinterval');
 
 # No more user settable stuff, here be dragons!
 
@@ -92,12 +99,6 @@ sub daemonize {								# Daemonize
 	# Get our running name
 	my $runname = $myname . 'd';
 
-	# check if our daemon is actually running	
-
-	unless (system("ps -e | grep >/dev/null $runname")) {
-		die "Can't daemonize, another copy appears to be running";
-	}
-
 	# Fork and exit parent. Makes sure we are not a process group leader.
 	my $pid = fork;
 	exit 0 if $pid;
@@ -107,7 +108,10 @@ sub daemonize {								# Daemonize
 	# process group and detach from any terminal.
 	setsid();
 	$pid = fork;
-	exit 0 if $pid;
+	if ($pid) {
+		print "$pid\n";
+		exit 0;
+	}
 	exit 1 if not defined $pid;
 
 	# We are a daemon now!
@@ -126,7 +130,7 @@ sub read_hosts {							# Generate hostmap database
 	my $fh;
 	lock(@worklist);
 	@worklist = ();							# Initialise worklist
-	open ($fh, "< /home/claranet/hosts")  || die "Can't open /etc/hosts $!";
+	open ($fh, "< /etc/hosts")  || die "Can't open /etc/hosts $!";
 	HOST:
 	while (<$fh>) {
 		chomp;
@@ -172,7 +176,7 @@ sub worker {								# Actual worker thread
 				my $host  = $_->{$ip};
 				my $afi   = ($ip=~m/:/) ? 'ipv6' : 'ipv4';
 				my $fpingcmd = ($afi eq 'ipv6') ? 'fping6' : 'fping';
-				my $fping = `$fpingcmd 2>&1 -q -c 1 $ip`; chomp($fping);
+				my $fping = `$fpingcmd 2>&1 -q -c 3 $ip`; chomp($fping);
 				my ($xmt, $rcv, $los, $min, $avg, $max);
 				if ($fping=~m# : xmt/rcv/%loss = (\d+)/(\d+)/(\d+)%#) {
 					($xmt, $rcv, $los) = ($1, $2, $3);
@@ -187,7 +191,14 @@ sub worker {								# Actual worker thread
 				# Build dispatch to graphite
 				my $dispatch_hostname 	= ($afi eq 'ipv6') ? "${hostname}_v6" : "${hostname}_v4";
 				my $dispatch_time 	= time;
-				my $dispatch_prefix 	= $key ? "$key $dispatch_root.$dispatch_hostname.$host" : "$dispatch_root.$dispatch_hostname.$host";
+				my $dispatch_key	= $key;
+				if ($keytype eq 'sha1') {
+                    $dispatch_key = sha1_hex($key.$dispatch_time);
+				} else {
+					die "Invalid keytype '$keytype'" if ($keytype ne 'none');
+				}
+
+				my $dispatch_prefix 	= $dispatch_key ? "$dispatch_key $dispatch_root.$dispatch_hostname.$host" : "$dispatch_root.$dispatch_hostname.$host";
 				my $dispatch_str 	= ''
 							. "$dispatch_prefix.packetloss $los $dispatch_time\n"
 							. "$dispatch_prefix.minrtt $min $dispatch_time\n"
