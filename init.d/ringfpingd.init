@@ -1,0 +1,77 @@
+#!/bin/bash
+#
+### BEGIN INIT INFO
+# Provides:          ringfpingd
+# Required-Start:    $network $remote_fs
+# Required-Stop:     $network $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Start ringfping daemon at boot time
+### END INIT INFO
+
+export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+export NAME=ringfpingd
+
+export RUN_DIR="/run"
+export PID_FILE="$RUN_DIR/$NAME.pid"
+
+if [[ $EUID -ne 0 ]]; then
+  echo "Please run as user root." 2>&1
+  exit 1
+fi
+
+
+ringfpingd_start() {
+    echo "starting ringfpingd... "
+    ps -ef | grep -e >/dev/null $NAME$
+    if [ $? -eq 0 ]; then
+	echo "daemon already running."
+	exit 1
+    else
+    	$NAME > $PID_FILE && echo "done."
+    fi
+}
+
+ringfpingd_stop() {
+    echo "stopping ringfpingd... "
+    if [ -e $PID_FILE ]; then
+    	head -1 $PID_FILE | xargs kill -INT
+	rm $PID_FILE
+    fi
+}
+
+ringfpingd_restart() {
+    ringfpingd_stop || exit 1
+    sleep 1
+    ringfpingd_start || exit 1
+}
+
+
+case "$1" in
+  start)
+    ringfpingd_start
+    ;;
+  stop)
+    ringfpingd_stop
+    ;;
+  restart)
+    ringfpingd_restart
+    ;;
+  status)
+    if pidof $NAME > /dev/null; then
+      echo "Running"
+      exit 0
+    else
+      echo "Not running"
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Usage: $NAME" \
+         "{start|stop|restart|status}" >&2
+    exit 1
+    ;;
+esac
+
+exit 0
+

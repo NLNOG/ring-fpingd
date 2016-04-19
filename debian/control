@@ -1,0 +1,12 @@
+Source: ringfpingd
+Section: perl
+Priority: optional
+Build-Depends: debhelper (>= 5)
+Build-Depends-Indep: perl (>= 5.6.10-12)
+Maintainer: Martin Pels <martin@rodecker.nl>
+Standards-Version: 3.8.0
+
+Package: ringfpingd
+Architecture: all
+Depends: libconfig-simple-perl, libdigest-sha-perl
+Description: NLNOG RING fping daemon

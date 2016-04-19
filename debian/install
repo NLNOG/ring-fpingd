@@ -1,0 +1,2 @@
+sbin/ringfpingd usr/sbin
+etc/ringfpingd.example.conf etc

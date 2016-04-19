@@ -1,0 +1,36 @@
+ringfpingd (1.0ubuntu5) precise; urgency=medium
+
+  * Start workers before boss, so boss can read the threadpool
+
+ -- Martin Pels <pels@pels-Latitude-E5450>  Tue, 19 Apr 2016 10:30:39 +0200
+
+ringfpingd (1.0ubuntu4) precise; urgency=low
+
+  * fping -c 3 (-c 1 means minrtt,avgrtt,maxrtt are equal) 
+
+ -- Martin Pels <pels@fizzix>  Sat, 14 Dec 2013 17:56:23 +0100
+
+ringfpingd (1.0ubuntu3) precise; urgency=low
+
+  * Add "status" option to init-script 
+
+ -- Martin Pels <pels@fizzix>  Mon, 25 Nov 2013 19:04:14 +0100
+
+ringfpingd (1.0ubuntu2) precise; urgency=low
+
+  * FIX: pinginterval config file bug
+
+ -- Martin Pels <pels@fizzix>  Mon, 25 Nov 2013 18:15:25 +0100
+
+ringfpingd (1.0ubuntu1) precise; urgency=low
+
+  * libdigest-sha1-perl => libdigest-sha-perl 
+
+ -- Martin Pels <pels@fizzix>  Mon, 11 Nov 2013 22:11:39 +0100
+
+ringfpingd (1.0) unstable; urgency=low
+
+  * Debianized
+
+ -- Martin Pels <martin@rodecker.nl>  Sun, 3 Nov 2013 11:14:33 +0100
+
