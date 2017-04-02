@@ -1,3 +1,9 @@
+ringfpingd (1.0ubuntu6) xenial; urgency=medium
+
+  * Fix init.d script to work with systemctl
+
+ -- Martin Pels <martin@rodecker.nl>  Sun, 02 Apr 2017 17:02:29 +0000
+
 ringfpingd (1.0ubuntu5) precise; urgency=medium
 
   * Start workers before boss, so boss can read the threadpool

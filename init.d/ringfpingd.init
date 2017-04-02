@@ -23,10 +23,12 @@ fi
 
 ringfpingd_start() {
     echo "starting ringfpingd... "
-    ps -ef | grep -e >/dev/null $NAME$
-    if [ $? -eq 0 ]; then
-	echo "daemon already running."
-	exit 1
+    if [ -f $PID_FILE ]; then
+        PID=`head -1 $PID_FILE`
+        if ps -p $PID > /dev/null; then
+	    echo "daemon already running."
+	    exit 1
+        fi
     else
     	$NAME > $PID_FILE && echo "done."
     fi
